@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- Declare Hermes >=0.23.0 as the supported minimum version.
+- Document process, Gateway, credential-handling and network behavior for catalog review.
+- No launcher behavior changes.
+
 ## 0.1.1
 
 Initial public release.

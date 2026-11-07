@@ -67,8 +67,31 @@ Gateway's control wire protocol and may require updates when that protocol chang
 The plugin does not patch core functions, edit default model settings, or submit
 an inference request during preparation. It is an independent community plugin.
 
+## Security and process disclosure
+
+- Registers only the `fast-chat` CLI command through `ctx.register_cli_command`;
+  it adds no model tools, hooks, middleware, or Desktop UI.
+- Runs the selected Hermes executable directly (no shell) for Gateway bootstrap
+  and, with `--tui`, for the interactive frontend. Use a trusted executable.
+  Gateway bootstrap can start a long-running Gateway that remains after exit.
+- Connects to the Hermes Gateway over an authenticated WebSocket. The legacy
+  path is loopback-only and reads the active profile's `gateway.sock.path`
+  pointer when needed, then connects to its same-user Unix control socket.
+  The modern path uses the endpoint returned by `gateway attach`.
+- Holds a single-use Gateway connection grant in memory. It does not read
+  `.env`, `auth.json`, keychains, or provider credential stores, and does not
+  persist the grant. Hermes owns provider authentication and session storage.
+- Creates a session and persists its launch settings through Hermes. It does
+  not change profile defaults. After launch, the normal Hermes frontend and
+  Gateway may contact the configured model provider or execute approved tools;
+  Fast mode can incur additional provider charges.
+- Adds no telemetry, self-updater, approval bypass, or unattended execution
+  mode. This command is for an interactive terminal, not cron or agent tools.
+
 ## Compatibility and limits
 
+- Hermes >=0.23.0. This is the supported floor, not a claim that all older
+  releases are incompatible; the required Gateway contract is checked at runtime.
 - Python 3.11+ and `websockets>=15,<16` in the Hermes environment.
 - Gateway support for `session.create` with `service_tier`, plus `config.set fast`.
   Windows also requires `gateway attach`; Windows has not been tested.
