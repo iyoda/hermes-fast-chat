@@ -1,0 +1,6 @@
+name: fast-chat
+version: 0.1.1
+description: Launch a CLI or TUI session with an explicit model and Fast mode.
+author: iyoda
+python_dependencies:
+  - "websockets>=15,<16"

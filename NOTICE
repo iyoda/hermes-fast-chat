@@ -1,0 +1,7 @@
+Hermes Fast Chat is an independent community plugin for Hermes Agent.
+
+The legacy bootstrap compatibility implementation follows the local control
+protocol and validation behavior of Hermes Agent by Nous Research:
+https://github.com/NousResearch/hermes-agent
+
+The upstream MIT license notice is retained in LICENSE.
