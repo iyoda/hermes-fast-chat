@@ -90,8 +90,10 @@ Gateway の対応判定を通っても、実際に要求した速度で処理さ
 - Hermes >=0.23.0 をサポート下限とします。それ以前の全バージョンが非互換という意味では
   ありません。必要な Gateway の契約は実行時に確認します。
 - Python 3.11 以上、`websockets>=15,<16`（対応する Hermes 実行環境に含まれます）。
-- Gateway が `gateway ensure`、セッション作成の `service_tier`、`config.set fast`
-  に対応していること。Windows は `gateway attach` も必要です。
+- Gateway がセッション作成の `service_tier` と `config.set fast` に対応していること。
+  接続には `gateway attach` を使います。これがない macOS/Linux では
+  `gateway ensure` と同一ユーザーの制御ソケットが必要です。
+  Windows は `gateway attach` が必要です。
   起動時に作成契約を確認し、非対応の Gateway では停止します。
 - 毎回、新しいセッションを作成します。既存セッションのモデルや速度は変更しません。
 - 通常のモデル・ツール設定は Gateway のプロファイルから読みます。
