@@ -23,12 +23,22 @@ spec.loader.exec_module(plugin)
 launcher = importlib.import_module("fast_chat_test_plugin.launcher")
 
 
-@pytest.mark.parametrize("tui,tier", [(False, "fast"), (True, "ultrafast")])
-def test_create_validate_and_resume_transport(tmp_path, monkeypatch, tui, tier):
+@pytest.mark.parametrize("tui,tier,automatic", [(False, "fast", False), (True, "ultrafast", False),
+                                              (False, "fast", True)])
+def test_create_validate_and_resume_transport(tmp_path, monkeypatch, tui, tier, automatic):
     parser = argparse.ArgumentParser()
     launcher.setup_parser(parser)
     flags = ["--model", "example-model", "--provider", "example-provider",
              "--tier", tier, "--in", str(tmp_path)]
+    if automatic:
+        from hermes_cli import config
+
+        monkeypatch.setattr(config, "load_config", lambda: {
+            "model": {"default": "opus", "provider": "anthropic"},
+            "fallback_model": {"model": "example-model", "provider": "example-provider",
+                               "base_url": "https://example.invalid/v1"},
+        })
+        flags = flags[4:]
     args = parser.parse_args(flags + (["--tui"] if tui else []))
     calls = []
 
@@ -41,13 +51,17 @@ def test_create_validate_and_resume_transport(tmp_path, monkeypatch, tui, tier):
                 if method == "runtime.describe":
                     result = {"session_create": {
                         "sources": ["cli", "tui"], "parameters": [
-                            "request_id", "source", "model", "provider", "cwd", "service_tier",
+                            "request_id", "source", "model", "provider", "cwd", "service_tier", "base_url",
                         ],
                     }}
                 elif method == "session.create":
                     result = {"session_id": "session-123"}
                 else:
                     result = {"key": "fast", "value": tier}
+                if automatic and method == "config.set" and len([c for c in calls if c[0] == "session.create"]) == 1:
+                    await ws.send(json.dumps({"jsonrpc": "2.0", "id": request["id"],
+                                              "error": {"message": "fast_unavailable"}}))
+                    continue
                 # Real gateways interleave notifications with RPC responses.
                 await ws.send(json.dumps({"jsonrpc": "2.0", "method": "session.info", "params": {}}))
                 await ws.send(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}))
@@ -66,6 +80,13 @@ def test_create_validate_and_resume_transport(tmp_path, monkeypatch, tui, tier):
             return await launcher.create_session(args)
 
     session_id = asyncio.run(scenario())
+    if automatic:
+        assert [(p["model"], p["provider"]) for method, p in calls if method == "session.create"] == [
+            ("opus", "anthropic"), ("example-model", "example-provider"),
+        ]
+        assert (args.model, args.provider) == ("example-model", "example-provider")
+        assert args.base_url == "https://example.invalid/v1"
+        assert dict(calls)["session.create"]["base_url"] == args.base_url
     created = dict(calls)["session.create"]
     assert created["model"] == "example-model"
     assert created["provider"] == "example-provider"
@@ -81,7 +102,7 @@ def test_create_validate_and_resume_transport(tmp_path, monkeypatch, tui, tier):
 def test_unavailable_tier_never_opens_frontend(tmp_path, monkeypatch, capsys):
     parser = argparse.ArgumentParser()
     launcher.setup_parser(parser)
-    args = parser.parse_args(["--model", "unsupported", "--in", str(tmp_path)])
+    args = parser.parse_args(["--model", "unsupported", "--cli", "--in", str(tmp_path)])
 
     async def create(args):
         class Socket:
@@ -132,6 +153,40 @@ def test_real_plugin_discovery_registers_cli(tmp_path, monkeypatch):
     assert args.model == "my-model"
     assert args.tui is True
     assert command["handler_fn"] is not None
+
+
+@pytest.mark.parametrize("interface,flags,expected", [
+    ("tui", [], True),
+    ("cli", [], False),
+    (None, [], False),
+    ("tui", ["--cli"], False),
+    ("cli", ["--tui"], True),
+])
+def test_launch_resolves_interface_before_creating_session(monkeypatch, interface, flags, expected):
+    from hermes_cli import config
+
+    monkeypatch.setattr(config, "load_config", lambda: {"display": {"interface": interface}})
+    parser = argparse.ArgumentParser()
+    launcher.setup_parser(parser)
+    args = parser.parse_args(["--model", "example-model", *flags])
+    created = []
+    opened = []
+
+    async def create(args):
+        created.append(args.tui)
+        return "session-interface"
+
+    monkeypatch.setattr(launcher, "create_session", create)
+    monkeypatch.setattr(launcher, "run_classic", lambda *args: opened.append("cli"))
+    monkeypatch.setattr(launcher.subprocess, "call", lambda command: opened.append(command) or 0)
+    if expected:
+        with pytest.raises(SystemExit) as exc:
+            launcher.launch(args)
+        assert exc.value.code == 0
+    else:
+        launcher.launch(args)
+    assert created == [expected]
+    assert opened == ([["hermes", "--tui", "--resume", "session-interface"]] if expected else ["cli"])
 
 
 def test_classic_receives_route_and_fast_before_opening(tmp_path, monkeypatch):

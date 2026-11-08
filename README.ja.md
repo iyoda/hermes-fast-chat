@@ -28,18 +28,36 @@ CLI コマンド登録には、既定の `plugins.isolation: in_process` が必�
 
 ## 起動
 
+`hermes fast-chat` のように `--model` を省略できます。まず対象プロファイルの
+デフォルトモデル・プロバイダーを Gateway で検証し、要求した tier が利用不可の場合だけ
+設定済み fallback を順に試します。`fallback_providers`、続いて旧形式の
+`fallback_model` を参照し、採用したモデルとプロバイダーを表示します。
+全候補が非対応ならエラーで停止し、通常速度には落としません。
+`--model` を明示した場合は自動切り替えしません。`--provider` 指定時は
+そのプロバイダー内に候補を限定します。設定自体は変更せず、推論も送信しません。
+検証で拒否された候補は、表示された ID の空セッションとして残る場合があります。
+fallback の `base_url` も引き継ぎます。直接的な認証情報の上書きは未対応です。
+認証情報には名前付きプロバイダーを使ってください。
+
 ```bash
 hermes fast-chat --model <model> --provider <provider>
 hermes fast-chat --tui --model <model> --provider <provider>
 hermes -p <profile> fast-chat --tui --model <model>
 ```
 
+`--tui` / `--cli` を省略すると、対象プロファイルの config の `display.interface` に従って
+CLI/TUI を選びます。未設定なら CLI です。`--tui` で TUI、`--cli` で CLI を明示でき、
+config より優先します。両方の同時指定はできません。
+
 `--provider` は省略できます。`--reasoning <level>`、`--tier ultrafast`、
 `--in <directory>` にも対応します。`--hermes-bin /absolute/path/to/hermes` で
 起動する Hermes 実行ファイルを明示できます。
 
-`--model` だけではプロバイダーは変更しません。例えばデフォルトが Anthropic で、
-OpenAI Codex のモデルを利用する場合は、次のように明示します。
+`--model` 指定時に `--provider` を省略すると、設定済みのデフォルト／fallback の
+モデル完全一致からプロバイダーと接続先を選びます。完全一致がない `gpt-` 系は、
+設定済み OpenAI／Codex 経路が一意ならそれを使います。候補が複数なら明示指定を求め、
+候補がなければ既定のプロバイダーを使います。モデル ID は書き換えません。
+プロバイダーを固定する場合は次のように明示します。
 
 ```bash
 hermes fast-chat --model gpt-6.1-sol --provider openai-codex
