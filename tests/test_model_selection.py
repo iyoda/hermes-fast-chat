@@ -1,9 +1,8 @@
 """Automatic Fast route selection without inference or profile writes."""
-import argparse
 import asyncio
 
 import pytest
-from test_fast_chat import launcher
+from plugin_support import launcher, parse_args
 
 
 @pytest.mark.parametrize("explicit,provider,failures,expected", [
@@ -19,12 +18,10 @@ def test_default_then_configured_fallback(monkeypatch, capsys, explicit, provide
     settings = {"model": {"default": "opus", "provider": "anthropic"},
                 "fallback_model": {"model": "gpt-sol-6.1", "provider": "openai-codex"}}
     monkeypatch.setattr(config, "load_config", lambda: settings)
-    parser = argparse.ArgumentParser()
-    launcher.setup_parser(parser)
     flags = ["--model", "opus"] if explicit else []
     if provider:
         flags += ["--provider", provider]
-    args = parser.parse_args(flags)
+    args = parse_args(flags)
     attempted = []
 
     async def prepare(ws, candidate):
@@ -52,9 +49,7 @@ def test_other_errors_do_not_trigger_fallback(monkeypatch):
         "model": {"default": "primary-model", "provider": "openai"},
         "fallback_providers": [{"model": "gpt-sol-6.1", "provider": "openai-codex"}],
     })
-    parser = argparse.ArgumentParser()
-    launcher.setup_parser(parser)
-    args = parser.parse_args([])
+    args = parse_args([])
     attempted = []
 
     async def prepare(ws, candidate):
