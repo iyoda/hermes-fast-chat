@@ -1,7 +1,6 @@
 """Plugin launch contracts against a real local WebSocket transport; no inference."""
 import argparse
 import asyncio
-import importlib.util
 import json
 import shutil
 import socket
@@ -12,22 +11,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from plugin_support import PLUGIN, launcher, parse_args
 from websockets.asyncio.server import serve
-
-PLUGIN = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("fast_chat_test_plugin", PLUGIN / "__init__.py",
-                                           submodule_search_locations=[str(PLUGIN)])
-plugin = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = plugin
-spec.loader.exec_module(plugin)
-launcher = importlib.import_module("fast_chat_test_plugin.launcher")
 
 
 @pytest.mark.parametrize("tui,tier,automatic", [(False, "fast", False), (True, "ultrafast", False),
                                               (False, "fast", True)])
 def test_create_validate_and_resume_transport(tmp_path, monkeypatch, tui, tier, automatic):
-    parser = argparse.ArgumentParser()
-    launcher.setup_parser(parser)
     flags = ["--model", "example-model", "--provider", "example-provider",
              "--tier", tier, "--in", str(tmp_path)]
     if automatic:
@@ -39,7 +29,7 @@ def test_create_validate_and_resume_transport(tmp_path, monkeypatch, tui, tier, 
                                "base_url": "https://example.invalid/v1"},
         })
         flags = flags[4:]
-    args = parser.parse_args(flags + (["--tui"] if tui else []))
+    args = parse_args(flags + (["--tui"] if tui else []))
     calls = []
 
     async def scenario():
@@ -100,9 +90,7 @@ def test_create_validate_and_resume_transport(tmp_path, monkeypatch, tui, tier, 
 
 
 def test_unavailable_tier_never_opens_frontend(tmp_path, monkeypatch, capsys):
-    parser = argparse.ArgumentParser()
-    launcher.setup_parser(parser)
-    args = parser.parse_args(["--model", "unsupported", "--cli", "--in", str(tmp_path)])
+    args = parse_args(["--model", "unsupported", "--cli", "--in", str(tmp_path)])
 
     async def create(args):
         class Socket:
@@ -142,7 +130,10 @@ def test_real_plugin_discovery_registers_cli(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HERMES_HOME", str(home))
-    shutil.copytree(PLUGIN, home / "plugins" / "fast-chat", ignore=shutil.ignore_patterns("__pycache__"))
+    destination = home / "plugins" / "fast-chat"
+    destination.mkdir(parents=True)
+    for name in ("plugin.yaml", "__init__.py", "launcher.py", "legacy_bootstrap.py"):
+        shutil.copy2(PLUGIN / name, destination / name)
     (home / "config.yaml").write_text("plugins:\n  enabled: [fast-chat]\n", encoding="utf-8")
     manager = PluginManager(scope_key=str(home))
     manager.discover_and_load()
@@ -166,9 +157,7 @@ def test_launch_resolves_interface_before_creating_session(monkeypatch, interfac
     from hermes_cli import config
 
     monkeypatch.setattr(config, "load_config", lambda: {"display": {"interface": interface}})
-    parser = argparse.ArgumentParser()
-    launcher.setup_parser(parser)
-    args = parser.parse_args(["--model", "example-model", *flags])
+    args = parse_args(["--model", "example-model", *flags])
     created = []
     opened = []
 
@@ -190,10 +179,8 @@ def test_launch_resolves_interface_before_creating_session(monkeypatch, interfac
 
 
 def test_classic_receives_route_and_fast_before_opening(tmp_path, monkeypatch):
-    parser = argparse.ArgumentParser()
-    launcher.setup_parser(parser)
-    args = parser.parse_args(["--model", "selected-model", "--provider", "selected-provider",
-                              "--in", str(tmp_path)])
+    args = parse_args(["--model", "selected-model", "--provider", "selected-provider",
+                       "--in", str(tmp_path)])
     opened = []
 
     class Client:

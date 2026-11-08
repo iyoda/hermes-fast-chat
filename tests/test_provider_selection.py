@@ -1,9 +1,8 @@
 """Provider selection never rewrites an explicit model identifier."""
-import argparse
 import asyncio
 
 import pytest
-from test_fast_chat import launcher
+from plugin_support import launcher, parse_args
 
 
 @pytest.mark.parametrize("model,provider,fallbacks,expected", [
@@ -23,9 +22,7 @@ def test_explicit_model_provider(monkeypatch, model, provider, fallbacks, expect
         "model": {"default": "opus", "provider": "anthropic"},
         "fallback_providers": fallbacks,
     })
-    parser = argparse.ArgumentParser()
-    launcher.setup_parser(parser)
-    args = parser.parse_args(["--model", model] + (["--provider", provider] if provider else []))
+    args = parse_args(["--model", model] + (["--provider", provider] if provider else []))
     received = []
 
     async def prepare(ws, selected):
@@ -45,8 +42,6 @@ def test_ambiguous_gpt_provider_requires_override(monkeypatch):
         "fallback_providers": [{"model": "gpt-a", "provider": "openai"},
                                {"model": "gpt-b", "provider": "openai-codex"}],
     })
-    parser = argparse.ArgumentParser()
-    launcher.setup_parser(parser)
-    args = parser.parse_args(["--model", "gpt-sol-6.1"])
+    args = parse_args(["--model", "gpt-sol-6.1"])
     with pytest.raises(launcher.LaunchError, match="--provider"):
         asyncio.run(launcher.prepare_selected_session(None, args))
