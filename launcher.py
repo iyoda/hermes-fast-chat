@@ -16,11 +16,19 @@ class LaunchError(Exception):
     """A launch failed before handing control to the frontend."""
 
 
+class FastUnavailable(LaunchError):
+    """The gateway refused the requested tier for this route."""
+
+
 def setup_parser(parser):
-    parser.add_argument("-m", "--model", required=True, help="Model for this new session")
+    parser.add_argument("-m", "--model", help="Model override (default: profile, then configured fallbacks)")
     parser.add_argument("--provider", help="Provider override for this session")
     parser.add_argument("--reasoning", help="Reasoning effort for this session")
-    parser.add_argument("--tui", action="store_true", help="Open the Ink TUI (default: classic CLI)")
+    interface = parser.add_mutually_exclusive_group()
+    interface.add_argument("--tui", dest="tui", action="store_const", const=True, default=None,
+                           help="Open the Ink TUI (default: display.interface from config)")
+    interface.add_argument("--cli", dest="tui", action="store_const", const=False,
+                           help="Open the classic CLI, overriding display.interface")
     parser.add_argument("--tier", choices=("fast", "ultrafast"), default="fast")
     parser.add_argument("--in", dest="cwd", default=None, help="Session working directory")
     parser.add_argument("--hermes-bin", default="hermes", help="Hermes executable to launch")
@@ -86,6 +94,8 @@ async def prepare_session(ws, args):
     for key in ("provider", "reasoning"):
         if value := getattr(args, key):
             params[key] = value
+    if base_url := getattr(args, "base_url", None):
+        params["base_url"] = base_url
     missing = set(params) - set(contract.get("parameters", []))
     if missing or params["source"] not in contract.get("sources", []):
         raise LaunchError("Gateway lacks the required session creation contract; update/restart Hermes.")
@@ -100,14 +110,89 @@ async def prepare_session(ws, args):
         })
     except LaunchError as exc:
         if str(exc) == "config.set: fast_unavailable":
-            raise LaunchError(
+            raise FastUnavailable(
                 "fast_unavailable: check the model, --provider and your Fast entitlement. "
-                "--model alone keeps the profile's default provider."
+                "Specify --provider to override automatic route selection."
             ) from exc
         raise
     if answer.get("value") != args.tier:
         raise LaunchError("Gateway did not confirm the requested Fast tier.")
     return session_id
+
+
+def configured_routes(config):
+    model = config.get("model") or {}
+    if not isinstance(model, dict):
+        model = {"default": model}
+    routes = [{"model": model.get("default"), "provider": model.get("provider"),
+               "base_url": model.get("base_url")}]
+    for key in ("fallback_providers", "fallback_model"):
+        entries = config.get(key) or []
+        if isinstance(entries, dict):
+            entries = [entries]
+        if isinstance(entries, list):
+            routes.extend(entry for entry in entries if isinstance(entry, dict)
+                          and all(isinstance(entry.get(k), str) and entry[k].strip()
+                                  for k in ("model", "provider")))
+    return routes
+
+
+def route_identity(entry):
+    return entry.get("provider"), (entry.get("base_url") or "").strip().rstrip("/")
+
+
+def infer_model_route(args):
+    from hermes_cli.config import load_config
+
+    routes = configured_routes(load_config())
+    matches = [e for e in routes if e.get("model") == args.model and e.get("provider")]
+    if not matches and args.model.startswith("gpt-"):
+        matches = [e for e in routes if e.get("provider") in ("openai", "openai-codex")]
+    if len({route_identity(e) for e in matches}) > 1:
+        raise LaunchError("Multiple configured routes match this model; specify --provider.")
+    selected = matches[0] if matches else routes[0]
+    if any(selected.get(k) for k in ("api_key", "key_env", "api_key_env")):
+        raise LaunchError("Fallback credential overrides are not supported; specify --provider.")
+    args.provider = selected.get("provider")
+    args.base_url = selected.get("base_url")
+
+
+async def prepare_selected_session(ws, args):
+    if args.model is not None:
+        if args.provider is None:
+            infer_model_route(args)
+        session_id = await prepare_session(ws, args)
+        print(f"Fast route: {args.provider or 'profile provider'} / {args.model}", file=sys.stderr)
+        return session_id
+
+    from hermes_cli.config import load_config
+    candidates = configured_routes(load_config())
+    if args.provider is not None:
+        candidates = [{**candidates[0], "provider": args.provider, "base_url": None},
+                      *(entry for entry in candidates[1:] if entry["provider"] == args.provider)]
+    seen = set()
+    for entry in candidates:
+        route = (entry.get("model"), entry.get("provider"))
+        identity = (route[0], *route_identity(entry))
+        if not route[0] or identity in seen:
+            continue
+        seen.add(identity)
+        if any(entry.get(key) for key in ("api_key", "key_env", "api_key_env")):
+            raise LaunchError("Fallback credential overrides are not supported; use a named provider.")
+        candidate = argparse.Namespace(**vars(args))
+        candidate.model, candidate.provider = route
+        candidate.base_url = entry.get("base_url")
+        try:
+            session_id = await prepare_session(ws, candidate)
+        except FastUnavailable:
+            print(f"Fast unavailable: {route[1] or 'profile provider'} / {route[0]}; checking fallback.",
+                  file=sys.stderr)
+            continue
+        args.model, args.provider = route
+        args.base_url = candidate.base_url
+        print(f"Fast route: {route[1] or 'profile provider'} / {route[0]}", file=sys.stderr)
+        return session_id
+    raise FastUnavailable("fast_unavailable: no configured default/fallback route supports the requested tier.")
 
 
 async def create_session(args):
@@ -120,7 +205,7 @@ async def create_session(args):
                            proxy=None, open_timeout=10, max_size=8 * 1024 * 1024) as ws:
             if ws.subprotocol != grant["protocol"]:
                 raise LaunchError("Gateway WebSocket protocol mismatch.")
-            return await prepare_session(ws, args)
+            return await prepare_selected_session(ws, args)
     except WebSocketException as exc:
         raise LaunchError("Gateway connection failed; no frontend was opened.") from exc
 
@@ -137,14 +222,22 @@ def run_classic(args, session_id):
     from cli import HermesCLI
 
     with chdir(Path(args.cwd or os.getcwd()).expanduser().resolve(strict=True)):
+        route_options = {}
+        if base_url := getattr(args, "base_url", None):
+            route_options["base_url"] = base_url
         client = HermesCLI(model=args.model, provider=args.provider, reasoning=args.reasoning,
-                           resume=session_id)
+                           resume=session_id, **route_options)
         client.service_tier = {"fast": "priority", "ultrafast": "ultrafast"}[args.tier]
         client.run()
 
 
 def launch(args):
     try:
+        if args.tui is None:
+            from hermes_cli.config import load_config
+
+            interface = (load_config().get("display", {}) or {}).get("interface", "cli")
+            args.tui = isinstance(interface, str) and interface.strip().lower() == "tui"
         session_id = asyncio.run(create_session(args))
         if args.tui:
             raise SystemExit(subprocess.call(frontend_command(args, session_id)))

@@ -25,6 +25,16 @@ that directory before replacing it with a Git-based installation.
 
 ## Usage
 
+Run `hermes fast-chat` without `--model` to try the active profile's default route,
+then its configured fallbacks only when the Gateway returns `fast_unavailable` for
+the requested tier. Hermes's fallback chain order is respected (`fallback_providers`,
+then legacy `fallback_model`). The selected provider/model is printed; profile settings
+are never changed. Explicit `--model` disables automatic switching. `--provider`
+restricts candidates to that provider. No compatible candidate means an error, not
+normal-speed operation. Rejected candidates can leave empty sessions with printed IDs.
+Fallback `base_url` is preserved. Inline fallback credential overrides are unsupported;
+use a named provider for credentials.
+
 ```bash
 hermes fast-chat --model <model> [--provider <provider>]
 hermes fast-chat --tui --model <model> [--provider <provider>]
@@ -33,18 +43,19 @@ hermes -p <profile> fast-chat --model <model> --provider <provider>
 
 | Option | Purpose |
 | --- | --- |
-| `-m`, `--model` | Required model override for the new session |
-| `--provider` | Provider override; omission keeps your profile's provider |
-| `--tui` | Open the Ink TUI; the default is the classic CLI |
+| `-m`, `--model` | Optional model override; omission tries the profile default, then configured fallback routes |
+| `--provider` | Explicit override; omission infers a route from configured default/fallback models |
+| `--tui` / `--cli` | Force the Ink TUI / classic CLI; omission uses the active profile's `display.interface` (`cli` if unset) |
 | `--tier fast\|ultrafast` | Requested speed; defaults to `fast` |
 | `--reasoning <level>` | Reasoning effort for this session |
 | `--in <directory>` | Session working directory |
 | `--hermes-bin <path>` | Hermes executable for gateway bootstrap and the TUI |
 
-**Changing the model does not change the provider.** If your default provider is
-Anthropic, specify `--provider openai-codex` to use your Codex subscription, or the
-appropriate provider for your account. Model names and Fast availability depend on
-that provider and your entitlement.
+With `--model` and no `--provider`, exact model matches in the profile's default
+and fallback routes take priority. For `gpt-` model IDs, a unique configured OpenAI
+or Codex route is used when there is no exact match. Ambiguous routes require
+`--provider`; otherwise the profile provider is retained. Model IDs are never
+rewritten, and availability still depends on the provider and your entitlement.
 
 Fast can cost more. Hermes validates the requested tier before opening the
 frontend; the provider determines the speed and billing actually served.
